@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": ["http://127.0.0.1:5500"]}}, supports_credentials=True)
 
 # ----------------------------------------
 # ThingsBoard Config
