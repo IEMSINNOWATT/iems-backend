@@ -2,6 +2,33 @@ services:
   - type: web
     name: iems-backend
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn INNOWATT_BACKEND:app
+    region: oregon
     plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:app"  # or your main backend file entry
+    envVars:
+      - key: FLASK_ENV
+        value: production
+    autoDeploy: true
+    branch: main
+    repo: https://github.com/IEMSINNOWATT/iems-backend
+
+  - type: web
+    name: iems-frontend
+    env: static
+    region: oregon
+    plan: free
+    buildCommand: "npm install && npm run build"
+    staticPublishPath: "dist"  # or build, if using create-react-app
+    autoDeploy: true
+    branch: main
+    repo: https://github.com/IEMSINNOWATT/iems-frontend
+
+  - type: background
+    name: ping-keepalive
+    env: python
+    plan: free
+    repo: https://github.com/IEMSINNOWATT/iems-backend
+    branch: main
+    buildCommand: "pip install requests"
+    startCommand: "python ping.py"
