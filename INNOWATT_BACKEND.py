@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 import time
 import socket
 import logging
-import threading
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -41,7 +40,7 @@ PASSWORD = os.getenv('TB_PASSWORD')
 DEVICE_ID = os.getenv('TB_DEVICE_ID')
 JWT_TOKEN = os.getenv('TB_JWT_TOKEN')
 
-# Case-insensitive key mapping
+# Case-insensitive key mapping (ThingsBoard keys -> our standardized lowercase keys)
 TELEMETRY_KEY_MAPPING = {
     'voltage': ['Voltage', 'voltage', 'VOLTAGE'],
     'current': ['Current', 'current', 'CURRENT'],
@@ -66,19 +65,7 @@ http.mount("https://", adapter)
 http.mount("http://", adapter)
 
 # ----------------------------------------
-# Keep-Alive Pinger
-# ----------------------------------------
-def keep_alive_ping():
-    while True:
-        try:
-            response = http.get("https://iems-backend.onrender.com/health", timeout=10)
-            logger.info(f"Keep-alive ping sent. Status: {response.status_code}")
-        except Exception as e:
-            logger.warning(f"Keep-alive ping failed: {e}")
-        time.sleep(180)  # every 3 minutes
-
-# ----------------------------------------
-# Internet Check
+# Check Internet
 # ----------------------------------------
 def check_internet_connection():
     try:
@@ -89,7 +76,7 @@ def check_internet_connection():
         return False
 
 # ----------------------------------------
-# Authentication
+# Get JWT
 # ----------------------------------------
 def get_auth_token():
     if not check_internet_connection():
@@ -113,7 +100,7 @@ def get_auth_token():
     return None
 
 # ----------------------------------------
-# Telemetry Fetch
+# Fetch Telemetry
 # ----------------------------------------
 def fetch_telemetry(token, keys=None, start_ts=None, end_ts=None, interval=None, limit=None):
     if not token or not check_internet_connection():
@@ -124,10 +111,11 @@ def fetch_telemetry(token, keys=None, start_ts=None, end_ts=None, interval=None,
         params = {}
 
         if keys:
+            # Convert our standardized keys to possible ThingsBoard keys
             tb_keys = []
             for key in keys:
                 tb_keys.extend(TELEMETRY_KEY_MAPPING.get(key.lower(), [key]))
-            params['keys'] = ','.join(set(tb_keys))
+            params['keys'] = ','.join(set(tb_keys))  # Remove duplicates
         
         if start_ts:
             params['startTs'] = start_ts
@@ -164,15 +152,17 @@ def fetch_telemetry(token, keys=None, start_ts=None, end_ts=None, interval=None,
         return None
 
 # ----------------------------------------
-# Helpers
+# Helper Functions
 # ----------------------------------------
 def find_matching_key(data, possible_keys):
+    """Find the first matching key in the data for any of the possible keys"""
     for key in possible_keys:
         if key in data:
             return key
     return None
 
 def get_value_and_timestamp(data, standard_key):
+    """Get value and timestamp for a standard key, checking all possible variations"""
     possible_keys = TELEMETRY_KEY_MAPPING.get(standard_key, [standard_key])
     actual_key = find_matching_key(data, possible_keys)
     
@@ -191,6 +181,7 @@ def process_telemetry_data(telemetry_data):
     if not telemetry_data:
         return None
 
+    # Get values using our standardized keys
     power, power_ts = get_value_and_timestamp(telemetry_data, "power")
     voltage, voltage_ts = get_value_and_timestamp(telemetry_data, "voltage")
     current, current_ts = get_value_and_timestamp(telemetry_data, "current")
@@ -224,7 +215,7 @@ def get_time_range(days):
     return start_ts, end_ts
 
 # ----------------------------------------
-# Endpoints
+# API Endpoints
 # ----------------------------------------
 @app.route('/api/telemetry')
 def get_telemetry():
@@ -242,6 +233,7 @@ def get_telemetry():
 
     processed = process_telemetry_data(telemetry_data)
 
+    # Handle ngrok_url separately
     ngrok_url = None
     for key in ['ngrok_url', 'Ngrok_Url', 'NGROK_URL']:
         if key in telemetry_data and telemetry_data[key]:
@@ -256,13 +248,132 @@ def get_telemetry():
 
 @app.route('/api/telemetry/weekly')
 def get_weekly_telemetry():
-    # Same logic (unchanged from your original code)
-    pass
+    token = JWT_TOKEN if JWT_TOKEN else get_auth_token()
+    if not token:
+        return jsonify({"error": "Authentication failed", "online": False}), 401
+
+    start_ts, end_ts = get_time_range(7)
+    telemetry_data = fetch_telemetry(
+        token,
+        keys=['power', 'voltage', 'current', 'frequency', 'rmp', 'energy'],
+        start_ts=start_ts,
+        end_ts=end_ts,
+        interval=3600000,
+        limit=168
+    )
+
+    if not telemetry_data:
+        return jsonify({"error": "Could not fetch weekly telemetry", "online": False}), 500
+
+    # Process the data points
+    processed_data = []
+    
+    # Get all possible power keys
+    power_keys = TELEMETRY_KEY_MAPPING.get('power', ['power'])
+    actual_power_key = find_matching_key(telemetry_data, power_keys) or 'power'
+    
+    # Get all possible voltage keys
+    voltage_keys = TELEMETRY_KEY_MAPPING.get('voltage', ['voltage'])
+    actual_voltage_key = find_matching_key(telemetry_data, voltage_keys) or 'voltage'
+    
+    # Similarly for other metrics
+    current_keys = TELEMETRY_KEY_MAPPING.get('current', ['current'])
+    actual_current_key = find_matching_key(telemetry_data, current_keys) or 'current'
+    
+    frequency_keys = TELEMETRY_KEY_MAPPING.get('frequency', ['frequency'])
+    actual_frequency_key = find_matching_key(telemetry_data, frequency_keys) or 'frequency'
+    
+    rmp_keys = TELEMETRY_KEY_MAPPING.get('rmp', ['rmp'])
+    actual_rmp_key = find_matching_key(telemetry_data, rmp_keys) or 'rmp'
+    
+    energy_keys = TELEMETRY_KEY_MAPPING.get('energy', ['energy'])
+    actual_energy_key = find_matching_key(telemetry_data, energy_keys) or 'energy'
+
+    # Get the maximum number of data points available
+    max_points = len(telemetry_data.get(actual_power_key, []))
+    
+    for i in range(max_points):
+        point = {
+            "timestamp": telemetry_data[actual_power_key][i]['ts'],
+            "power": telemetry_data[actual_power_key][i]['value'],
+            "voltage": telemetry_data[actual_voltage_key][i]['value'] if i < len(telemetry_data.get(actual_voltage_key, [])) else 0,
+            "current": telemetry_data[actual_current_key][i]['value'] if i < len(telemetry_data.get(actual_current_key, [])) else 0,
+            "frequency": telemetry_data[actual_frequency_key][i]['value'] if i < len(telemetry_data.get(actual_frequency_key, [])) else 0,
+            "rmp": telemetry_data[actual_rmp_key][i]['value'] if i < len(telemetry_data.get(actual_rmp_key, [])) else 0,
+            "energy": telemetry_data[actual_energy_key][i]['value'] if i < len(telemetry_data.get(actual_energy_key, [])) else 0
+        }
+        processed_data.append(point)
+
+    return jsonify({
+        "data": processed_data,
+        "start_date": datetime.fromtimestamp(start_ts / 1000).strftime('%Y-%m-%d'),
+        "end_date": datetime.fromtimestamp(end_ts / 1000).strftime('%Y-%m-%d'),
+        "interval": "hourly",
+        "online": True
+    })
 
 @app.route('/api/telemetry/monthly')
 def get_monthly_telemetry():
-    # Same logic (unchanged from your original code)
-    pass
+    token = JWT_TOKEN if JWT_TOKEN else get_auth_token()
+    if not token:
+        return jsonify({"error": "Authentication failed", "online": False}), 401
+
+    start_ts, end_ts = get_time_range(30)
+    telemetry_data = fetch_telemetry(
+        token,
+        keys=['power', 'voltage', 'current', 'frequency', 'rmp', 'energy'],
+        start_ts=start_ts,
+        end_ts=end_ts,
+        interval=86400000,
+        limit=30
+    )
+
+    if not telemetry_data:
+        return jsonify({"error": "Could not fetch monthly telemetry", "online": False}), 500
+
+    # Process the data points (similar to weekly but with daily interval)
+    processed_data = []
+    
+    # Get all actual keys (same as weekly endpoint)
+    power_keys = TELEMETRY_KEY_MAPPING.get('power', ['power'])
+    actual_power_key = find_matching_key(telemetry_data, power_keys) or 'power'
+    
+    voltage_keys = TELEMETRY_KEY_MAPPING.get('voltage', ['voltage'])
+    actual_voltage_key = find_matching_key(telemetry_data, voltage_keys) or 'voltage'
+    
+    current_keys = TELEMETRY_KEY_MAPPING.get('current', ['current'])
+    actual_current_key = find_matching_key(telemetry_data, current_keys) or 'current'
+    
+    frequency_keys = TELEMETRY_KEY_MAPPING.get('frequency', ['frequency'])
+    actual_frequency_key = find_matching_key(telemetry_data, frequency_keys) or 'frequency'
+    
+    rmp_keys = TELEMETRY_KEY_MAPPING.get('rmp', ['rmp'])
+    actual_rmp_key = find_matching_key(telemetry_data, rmp_keys) or 'rmp'
+    
+    energy_keys = TELEMETRY_KEY_MAPPING.get('energy', ['energy'])
+    actual_energy_key = find_matching_key(telemetry_data, energy_keys) or 'energy'
+
+    max_points = len(telemetry_data.get(actual_power_key, []))
+    
+    for i in range(max_points):
+        point = {
+            "timestamp": telemetry_data[actual_power_key][i]['ts'],
+            "power": telemetry_data[actual_power_key][i]['value'],
+            "voltage": telemetry_data[actual_voltage_key][i]['value'] if i < len(telemetry_data.get(actual_voltage_key, [])) else 0,
+            "current": telemetry_data[actual_current_key][i]['value'] if i < len(telemetry_data.get(actual_current_key, [])) else 0,
+            "frequency": telemetry_data[actual_frequency_key][i]['value'] if i < len(telemetry_data.get(actual_frequency_key, [])) else 0,
+            "rmp": telemetry_data[actual_rmp_key][i]['value'] if i < len(telemetry_data.get(actual_rmp_key, [])) else 0,
+            "energy": telemetry_data[actual_energy_key][i]['value'] if i < len(telemetry_data.get(actual_energy_key, [])) else 0
+        }
+        processed_data.append(point)
+
+    return jsonify({
+        "data": processed_data,
+        "start_date": datetime.fromtimestamp(start_ts / 1000).strftime('%Y-%m-%d'),
+        "end_date": datetime.fromtimestamp(end_ts / 1000).strftime('%Y-%m-%d'),
+        "interval": "daily",
+        "online": True
+    })
 
 @app.route('/health')
 def health_check():
@@ -272,13 +383,6 @@ def health_check():
         "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     })
 
-# ----------------------------------------
-# Entry Point
-# ----------------------------------------
 if __name__ == '__main__':
     logger.info("Starting ThingsBoard Data Fetcher Service")
-
-    # Start keep-alive thread
-    threading.Thread(target=keep_alive_ping, daemon=True).start()
-
     app.run(host='0.0.0.0', port=5000, debug=False)
