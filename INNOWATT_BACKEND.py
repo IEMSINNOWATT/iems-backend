@@ -220,32 +220,37 @@ def get_time_range(days):
 # ----------------------------------------
 @app.route('/api/telemetry')
 def get_telemetry():
-    token = JWT_TOKEN if JWT_TOKEN else get_auth_token()
-    if not token:
-        return jsonify({"error": "Authentication failed", "online": False}), 401
+    try:
+        token = JWT_TOKEN if JWT_TOKEN else get_auth_token()
+        if not token:
+            return jsonify({"error": "Authentication failed", "online": False}), 401
 
-    telemetry_data = fetch_telemetry(
-        token, 
-        keys=['power', 'voltage', 'current', 'frequency', 'rmp', 'energy', 'powerfact', 'ngrok_url']
-    )
-    
-    if not telemetry_data:
-        return jsonify({"error": "Could not fetch telemetry", "online": False}), 500
+        telemetry_data = fetch_telemetry(
+            token, 
+            keys=['power', 'voltage', 'current', 'frequency', 'rmp', 'energy', 'powerfact', 'ngrok_url']
+        )
+        
+        if not telemetry_data:
+            return jsonify({"error": "Could not fetch telemetry", "online": False}), 500
 
-    processed = process_telemetry_data(telemetry_data)
+        processed = process_telemetry_data(telemetry_data)
 
-    # Handle ngrok_url separately
-    ngrok_url = None
-    for key in ['ngrok_url', 'Ngrok_Url', 'NGROK_URL']:
-        if key in telemetry_data and telemetry_data[key]:
-            try:
-                ngrok_url = telemetry_data[key][0]["value"]
-                break
-            except (KeyError, IndexError, TypeError):
-                continue
-    processed["ngrok_url"] = ngrok_url
+        # Handle ngrok_url separately
+        ngrok_url = None
+        for key in ['ngrok_url', 'Ngrok_Url', 'NGROK_URL']:
+            if key in telemetry_data and telemetry_data[key]:
+                try:
+                    ngrok_url = telemetry_data[key][0]["value"]
+                    break
+                except (KeyError, IndexError, TypeError):
+                    continue
+        processed["ngrok_url"] = ngrok_url
 
-    return jsonify(processed)
+        return jsonify(processed)
+
+    except Exception as e:
+        logger.exception("❌ Unhandled error in /api/telemetry")
+        return jsonify({"error": str(e), "online": False}), 500
 
 @app.route('/api/telemetry/weekly')
 def get_weekly_telemetry():
@@ -387,4 +392,3 @@ if __name__ == '__main__':
     __import__('threading').Thread(target=lambda: __import__('subprocess').Popen(['python', 'ping.py']), daemon=True).start()
     logger.info("Starting ThingsBoard Data Fetcher Service")
     app.run(host='0.0.0.0', port=5000, debug=False)
-
