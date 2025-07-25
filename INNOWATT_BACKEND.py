@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["http://127.0.0.1:5500"])
 
 # ----------------------------------------
 # ThingsBoard Config
@@ -248,9 +248,10 @@ def get_telemetry():
 
         return jsonify(processed)
 
-    except Exception as e:
-        logger.exception("❌ Unhandled error in /api/telemetry")
-        return jsonify({"error": str(e), "online": False}), 500
+except Exception as e:
+    logger.exception("❌ Unhandled error in /api/telemetry")
+    return jsonify({"error": str(e), "online": False}), 500
+
 
 @app.route('/api/telemetry/weekly')
 def get_weekly_telemetry():
@@ -388,6 +389,11 @@ def health_check():
         "thingsboard_accessible": check_internet_connection(),
         "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     })
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"Unhandled 500 error: {error}")
+    return jsonify({"error": "Internal server error", "online": False}), 500
+
 if __name__ == '__main__':
     __import__('threading').Thread(target=lambda: __import__('subprocess').Popen(['python', 'ping.py']), daemon=True).start()
     logger.info("Starting ThingsBoard Data Fetcher Service")
