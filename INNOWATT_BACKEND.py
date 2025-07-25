@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, origins=["http://127.0.0.1:5500"])
+CORS(app)
 
 # ----------------------------------------
 # ThingsBoard Config
@@ -220,38 +220,32 @@ def get_time_range(days):
 # ----------------------------------------
 @app.route('/api/telemetry')
 def get_telemetry():
-    try:
-        token = JWT_TOKEN if JWT_TOKEN else get_auth_token()
-        if not token:
-            return jsonify({"error": "Authentication failed", "online": False}), 401
+    token = JWT_TOKEN if JWT_TOKEN else get_auth_token()
+    if not token:
+        return jsonify({"error": "Authentication failed", "online": False}), 401
 
-        telemetry_data = fetch_telemetry(
-            token, 
-            keys=['power', 'voltage', 'current', 'frequency', 'rmp', 'energy', 'powerfact', 'ngrok_url']
-        )
-        
-        if not telemetry_data:
-            return jsonify({"error": "Could not fetch telemetry", "online": False}), 500
+    telemetry_data = fetch_telemetry(
+        token, 
+        keys=['power', 'voltage', 'current', 'frequency', 'rmp', 'energy', 'powerfact', 'ngrok_url']
+    )
+    
+    if not telemetry_data:
+        return jsonify({"error": "Could not fetch telemetry", "online": False}), 500
 
-        processed = process_telemetry_data(telemetry_data)
+    processed = process_telemetry_data(telemetry_data)
 
-        # Handle ngrok_url separately
-        ngrok_url = None
-        for key in ['ngrok_url', 'Ngrok_Url', 'NGROK_URL']:
-            if key in telemetry_data and telemetry_data[key]:
-                try:
-                    ngrok_url = telemetry_data[key][0]["value"]
-                    break
-                except (KeyError, IndexError, TypeError):
-                    continue
-        processed["ngrok_url"] = ngrok_url
+    # Handle ngrok_url separately
+    ngrok_url = None
+    for key in ['ngrok_url', 'Ngrok_Url', 'NGROK_URL']:
+        if key in telemetry_data and telemetry_data[key]:
+            try:
+                ngrok_url = telemetry_data[key][0]["value"]
+                break
+            except (KeyError, IndexError, TypeError):
+                continue
+    processed["ngrok_url"] = ngrok_url
 
-        return jsonify(processed)
-
-except Exception as e:
-    logger.exception("❌ Unhandled error in /api/telemetry")
-    return jsonify({"error": str(e), "online": False}), 500
-
+    return jsonify(processed)
 
 @app.route('/api/telemetry/weekly')
 def get_weekly_telemetry():
@@ -389,11 +383,6 @@ def health_check():
         "thingsboard_accessible": check_internet_connection(),
         "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     })
-@app.errorhandler(500)
-def internal_error(error):
-    logger.error(f"Unhandled 500 error: {error}")
-    return jsonify({"error": "Internal server error", "online": False}), 500
-
 if __name__ == '__main__':
     __import__('threading').Thread(target=lambda: __import__('subprocess').Popen(['python', 'ping.py']), daemon=True).start()
     logger.info("Starting ThingsBoard Data Fetcher Service")
